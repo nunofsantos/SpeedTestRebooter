@@ -1,3 +1,5 @@
+from ast import literal_eval
+from ConfigParser import ConfigParser
 import logging
 from time import sleep
 
@@ -20,20 +22,6 @@ class TimeoutMachine(Machine):
 
 
 class SpeedTestRebooter(TimeoutMachine):
-    SLOW_SPEED = 10
-    CHECK_INTERVAL_MINUTES = 1
-    QUIET_HOURS_RANGE = [22, 8]
-    ROUTER_PIN = 10
-    MODEM_PIN = 11
-    BUTTON_PIN = 23
-    NORMAL_LED_PIN = 25
-    SLOW_LED_PIN = 18
-    REBOOTING_LED_PIN = 15
-    BUZZER_PIN = 21
-    REBOOT_DELAY_SECONDS = 10
-    ROUTER_DELAY_SECONDS = 10
-    MANUAL_REBOOT_SECONDS = 5
-
     def __init__(self):
         states = [
             'normal',
@@ -86,15 +74,37 @@ class SpeedTestRebooter(TimeoutMachine):
         )
 
         GPIO.setmode(GPIO.BCM)
-        self.router = DigitalOutputDevice(self.ROUTER_PIN, initial=GPIO.HIGH)
-        self.modem = DigitalOutputDevice(self.MODEM_PIN, initial=GPIO.HIGH)
-        self.normal_led = LED(self.NORMAL_LED_PIN)
-        self.slow_led = LED(self.SLOW_LED_PIN)
-        self.rebooting_led = LED(self.REBOOTING_LED_PIN)
-        self.button = Button(self.BUTTON_PIN, self.button_pressed, self.MANUAL_REBOOT_SECONDS, self.button_held)
-        self.buzzer = Buzzer(self.BUZZER_PIN, 10000, self.QUIET_HOURS_RANGE)
-        self.download_speed = self.SLOW_SPEED
+        self.config = self.read_config()
+        self.router = DigitalOutputDevice(self.config['ROUTER_PIN'], initial=GPIO.HIGH)
+        self.modem = DigitalOutputDevice(self.config['MODEM_PIN'], initial=GPIO.HIGH)
+        self.normal_led = LED(self.config['NORMAL_LED_PIN'])
+        self.slow_led = LED(self.config['SLOW_LED_PIN'])
+        self.rebooting_led = LED(self.config['REBOOTING_LED_PIN'])
+        self.button = Button(self.config['BUTTON_PIN'], self.button_pressed,
+                             self.config['MANUAL_REBOOT_SECONDS'], self.button_held)
+        self.buzzer = Buzzer(self.config['BUZZER_PIN'], 10000, self.config['QUIET_HOURS_RANGE'])
+        self.download_speed = self.config['SLOW_SPEED']
         self.to_normal()
+
+    @staticmethod
+    def read_config():
+        parser = ConfigParser()
+        parser.read('config.ini')
+        return {
+            'BUTTON_PIN': parser.getint('Config', 'BUTTON_PIN'),
+            'BUZZER_PIN': parser.getint('Config', 'BUZZER_PIN'),
+            'CHECK_INTERVAL_MINUTES': parser.getfloat('Config', 'CHECK_INTERVAL_MINUTES'),
+            'MANUAL_REBOOT_SECONDS': parser.getint('Config', 'MANUAL_REBOOT_SECONDS'),
+            'MODEM_PIN': parser.getint('Config', 'MODEM_PIN'),
+            'NORMAL_LED_PIN': parser.getint('Config', 'NORMAL_LED_PIN'),
+            'QUIET_HOURS_RANGE': literal_eval(parser.get('Config', 'QUIET_HOURS_RANGE')),
+            'REBOOT_DELAY_SECONDS': parser.getint('Config', 'REBOOT_DELAY_SECONDS'),
+            'REBOOTING_LED_PIN': parser.getint('Config', 'REBOOTING_LED_PIN'),
+            'ROUTER_DELAY_SECONDS': parser.getint('Config', 'ROUTER_DELAY_SECONDS'),
+            'ROUTER_PIN': parser.getint('Config', 'ROUTER_PIN'),
+            'SLOW_LED_PIN': parser.getint('Config', 'SLOW_LED_PIN'),
+            'SLOW_SPEED': parser.getfloat('Config', 'SLOW_SPEED'),
+        }
 
     def check_speed(self):
         self.slow_led.off()
@@ -104,14 +114,14 @@ class SpeedTestRebooter(TimeoutMachine):
         s.get_best_server()
         s.download()
         self.download_speed = s.results.download / 10**6
-        log.debug('Download speed = {} MBps'.format(self.download_speed))
+        log.debug('Download speed = {:.2f} MBps'.format(self.download_speed))
         self.update()
 
     def sleep(self):
-        sleep(self.CHECK_INTERVAL_MINUTES * 60.0)
+        sleep(self.config['CHECK_INTERVAL_MINUTES'] * 60.0)
 
     def can_go_normal(self):
-        return self.download_speed >= self.SLOW_SPEED
+        return self.download_speed >= self.config['SLOW_SPEED']
 
     def can_go_low(self):
         return not self.can_go_normal()
@@ -147,11 +157,12 @@ class SpeedTestRebooter(TimeoutMachine):
         self.rebooting_led.off()
 
     def reboot(self):
+        log.warning('Rebooting')
         self.modem.off()
         self.router.off()
-        sleep(self.REBOOT_DELAY_SECONDS)
+        sleep(self.config['REBOOT_DELAY_SECONDS'])
         self.modem.on()
-        sleep(self.ROUTER_DELAY_SECONDS)
+        sleep(self.config['ROUTER_DELAY_SECONDS'])
         self.router.on()
         self.to_normal()
 
