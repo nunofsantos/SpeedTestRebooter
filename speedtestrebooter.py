@@ -10,7 +10,7 @@ from raspberrypi_utils.input_devices import Button
 from raspberrypi_utils.output_devices import Buzzer, DigitalOutputDevice, LED
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.DEBUG)
-# logging.getLogger('transitions').setLevel(logging.ERROR)
+logging.getLogger('transitions').setLevel(logging.WARNING)
 log = logging.getLogger()
 
 
@@ -21,7 +21,7 @@ class TimeoutMachine(Machine):
 
 class SpeedTestRebooter(TimeoutMachine):
     SLOW_SPEED = 10
-    CHECK_INTERVAL_MINUTES = 15
+    CHECK_INTERVAL_MINUTES = 1
     QUIET_HOURS_RANGE = [22, 8]
     ROUTER_PIN = 10
     MODEM_PIN = 11
@@ -91,23 +91,23 @@ class SpeedTestRebooter(TimeoutMachine):
         self.normal_led = LED(self.NORMAL_LED_PIN)
         self.slow_led = LED(self.SLOW_LED_PIN)
         self.rebooting_led = LED(self.REBOOTING_LED_PIN)
-        self.button = Button(self.BUTTON_PIN, self.button_pressed, 5, self.button_held)
+        self.button = Button(self.BUTTON_PIN, self.button_pressed, self.MANUAL_REBOOT_SECONDS, self.button_held)
         self.buzzer = Buzzer(self.BUZZER_PIN, 10000, self.QUIET_HOURS_RANGE)
         self.download_speed = self.SLOW_SPEED
         self.to_normal()
 
     def check_speed(self):
+        self.slow_led.off()
+        self.normal_led.off()
+        self.rebooting_led.on()
         s = speedtest.Speedtest()
-        # s.get_servers([1774])  # 1774 = Comcast in Boston
         s.get_best_server()
         s.download()
         self.download_speed = s.results.download / 10**6
-        # self.download_speed = 200
         log.debug('Download speed = {} MBps'.format(self.download_speed))
         self.update()
 
     def sleep(self):
-        print 'sleep'
         sleep(self.CHECK_INTERVAL_MINUTES * 60.0)
 
     def can_go_normal(self):
@@ -119,14 +119,18 @@ class SpeedTestRebooter(TimeoutMachine):
     def on_enter_low(self):
         self.buzzer.stop()
         self.normal_led.off()
+        self.rebooting_led.off()
         self.slow_led.on()
 
     def on_enter_normal(self):
         self.buzzer.stop()
         self.slow_led.off()
+        self.rebooting_led.off()
         self.normal_led.on()
 
     def on_enter_warn_reboot(self):
+        self.normal_led.off()
+        self.rebooting_led.off()
         self.slow_led.flash()
         self.buzzer.start()
 
