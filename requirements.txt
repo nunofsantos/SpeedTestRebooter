@@ -1,4 +1,4 @@
-arrow
-raspberrypi_utils
-speedtest-cli
-transitions
+arrow==0.10.0
+raspberrypi_utils==0.1.0
+speedtest-cli==1.0.7
+transitions==0.6.2
