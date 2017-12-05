@@ -1,0 +1,15 @@
+[Unit]
+Description=SpeedTestRebooter
+After=multi-user.target
+
+[Service]
+Type=idle
+User=pi
+Group=pi
+StandardOutput=null
+StandardError=null
+WorkingDirectory=/home/pi/SpeedTestRebooter
+ExecStart=/usr/bin/python /home/pi/SpeedTestRebooter/main.py
+
+[Install]
+WantedBy=multi-user.target

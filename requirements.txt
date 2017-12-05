@@ -1,4 +1,6 @@
+Adafruit_LED_Backpack==1.8.1
 arrow==0.10.0
-raspberrypi_utils==0.1.0
+raspberrypi_utils==0.2.0
+RPi.GPIO==0.6.3
 speedtest-cli==1.0.7
 transitions==0.6.2

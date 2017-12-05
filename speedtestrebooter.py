@@ -3,6 +3,7 @@ from ConfigParser import ConfigParser
 import logging
 from time import sleep
 
+from Adafruit_LED_Backpack import HT16K33, SevenSegment
 import RPi.GPIO as GPIO
 import speedtest
 from transitions import Machine
@@ -13,6 +14,8 @@ from raspberrypi_utils.output_devices import Buzzer, DigitalOutputDevice, LED
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.DEBUG)
 logging.getLogger('transitions').setLevel(logging.WARNING)
+logging.getLogger('HT16K33').setLevel(logging.WARNING)
+logging.getLogger('SevenSegment').setLevel(logging.WARNING)
 log = logging.getLogger()
 
 
@@ -84,7 +87,10 @@ class SpeedTestRebooter(TimeoutMachine):
                              self.config['MANUAL_REBOOT_SECONDS'], self.button_held)
         self.buzzer = Buzzer(self.config['BUZZER_PIN'], 10000, self.config['QUIET_HOURS_RANGE'])
         self.download_speed = self.config['SLOW_SPEED']
+        self.display = SevenSegment.SevenSegment(address=0x70)
+        self.display.begin()
         self.to_normal()
+        log.debug('Initialized')
 
     @staticmethod
     def read_config():
@@ -94,6 +100,7 @@ class SpeedTestRebooter(TimeoutMachine):
             'BUTTON_PIN': parser.getint('Config', 'BUTTON_PIN'),
             'BUZZER_PIN': parser.getint('Config', 'BUZZER_PIN'),
             'CHECK_INTERVAL_MINUTES': parser.getfloat('Config', 'CHECK_INTERVAL_MINUTES'),
+            'CHECK_INTERVAL_MINUTES_AFTER_LOW': parser.getfloat('Config', 'CHECK_INTERVAL_MINUTES_AFTER_LOW'),
             'MANUAL_REBOOT_SECONDS': parser.getint('Config', 'MANUAL_REBOOT_SECONDS'),
             'MODEM_PIN': parser.getint('Config', 'MODEM_PIN'),
             'NORMAL_LED_PIN': parser.getint('Config', 'NORMAL_LED_PIN'),
@@ -114,11 +121,22 @@ class SpeedTestRebooter(TimeoutMachine):
         s.get_best_server()
         s.download()
         self.download_speed = s.results.download / 10**6
-        log.debug('Download speed = {:.2f} MBps'.format(self.download_speed))
+        self.display_speed()
+        log.debug('Download speed = {:.1f} Mbps'.format(self.download_speed))
         self.update()
 
+    def display_speed(self, clear=False):
+        self.display.clear()
+        if clear:
+            self.display.write_display()
+        else:
+            self.display.print_float(self.download_speed, decimal_digits=1, justify_right=True)
+        self.display.write_display()
+
     def sleep(self):
-        sleep(self.config['CHECK_INTERVAL_MINUTES'] * 60.0)
+        minutes = self.config['CHECK_INTERVAL_MINUTES'] if self.can_go_normal() \
+            else self.config['CHECK_INTERVAL_MINUTES_AFTER_LOW']
+        sleep(minutes * 60.0)
 
     def can_go_normal(self):
         return self.download_speed >= self.config['SLOW_SPEED']
@@ -127,18 +145,21 @@ class SpeedTestRebooter(TimeoutMachine):
         return not self.can_go_normal()
 
     def on_enter_low(self):
+        self.display.set_blink(HT16K33.HT16K33_BLINK_1HZ)
         self.buzzer.stop()
         self.normal_led.off()
         self.rebooting_led.off()
         self.slow_led.on()
 
     def on_enter_normal(self):
+        self.display.set_blink(HT16K33.HT16K33_BLINK_OFF)
         self.buzzer.stop()
         self.slow_led.off()
         self.rebooting_led.off()
         self.normal_led.on()
 
     def on_enter_warn_reboot(self):
+        self.display.set_blink(HT16K33.HT16K33_BLINK_2HZ)
         self.normal_led.off()
         self.rebooting_led.off()
         self.slow_led.flash()
@@ -154,6 +175,7 @@ class SpeedTestRebooter(TimeoutMachine):
         self.rebooting_led.flash(on_seconds=1, off_seconds=0.5)
 
     def on_exit_rebooting(self):
+        self.display.set_blink(HT16K33.HT16K33_BLINK_OFF)
         self.rebooting_led.off()
 
     def reboot(self):
@@ -170,4 +192,6 @@ class SpeedTestRebooter(TimeoutMachine):
         self.buzzer.stop()
         self.normal_led.off()
         self.slow_led.off()
+        self.display_speed(clear=True)
         GPIO.cleanup()
+        log.debug('Shutdown')
