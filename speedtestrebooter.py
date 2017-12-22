@@ -10,12 +10,13 @@ from transitions.extensions.states import add_state_features, Timeout
 
 from raspberrypi_utils.input_devices import Button
 from raspberrypi_utils.output_devices import Buzzer, DigitalOutputDevice, LED
-from raspberrypi_utils.utils import ReadConfigMixin
+from raspberrypi_utils.utils import ReadConfigMixin, send_gmail
 
 
 log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-log_filehandler = RotatingFileHandler('/var/log/speedtestreboot/speedtestreboot.log', maxBytes=1024**2, backupCount=100)
+log_filehandler = RotatingFileHandler('/var/log/speedtestrebooter/speedtestrebooter.log',
+                                      maxBytes=1024**2, backupCount=100)
 log_filehandler.setFormatter(log_formatter)
 log_filehandler.setLevel(logging.INFO)
 
@@ -51,7 +52,7 @@ class SpeedTestRebooter(ReadConfigMixin, TimeoutMachine):
         states = [
             'normal',
             'low',
-            {'name': 'warn_reboot', 'timeout': 30, 'on_timeout': 'warn_expired'},
+            {'name': 'warn_reboot', 'timeout': 60, 'on_timeout': 'warn_expired'},
             'rebooting',
         ]
         transitions = [
@@ -83,6 +84,7 @@ class SpeedTestRebooter(ReadConfigMixin, TimeoutMachine):
                 'trigger': 'button_pressed',
                 'source': ['low', 'warn_reboot'],
                 'dest': 'normal',
+                'after': 'reboot_cancelled'
             },
             {
                 'trigger': 'button_held',
@@ -100,28 +102,28 @@ class SpeedTestRebooter(ReadConfigMixin, TimeoutMachine):
 
         GPIO.setmode(GPIO.BCM)
         self.config = self.read_config()
-        self.router = DigitalOutputDevice(self.config['Main']['ROUTER_PIN'], initial_on=True, on_high_logic=False)
-        self.modem = DigitalOutputDevice(self.config['Main']['MODEM_PIN'], initial_on=True, on_high_logic=False)
+        self.router = DigitalOutputDevice(self.config['Main']['ROUTER_PIN'], initial_on=True, on_high_logic=True)
+        self.modem = DigitalOutputDevice(self.config['Main']['MODEM_PIN'], initial_on=True, on_high_logic=True)
         self.normal_led = LED(self.config['Main']['NORMAL_LED_PIN'])
         self.slow_led = LED(self.config['Main']['SLOW_LED_PIN'])
         self.rebooting_led = LED(self.config['Main']['REBOOTING_LED_PIN'])
         self.button = Button(self.config['Main']['BUTTON_PIN'], self.button_pressed,
-                             self.config['Main']['MANUAL_REBOOT_SECONDS'], self.button_held)
+                             hold_seconds=self.config['Main']['MANUAL_REBOOT_SECONDS'], held_callback=self.button_held)
         self.buzzer = Buzzer(self.config['Main']['BUZZER_PIN'], 10000, self.config['Main']['QUIET_HOURS_RANGE'])
         self.download_speed = self.config['Main']['SLOW_SPEED']
+        self.speedtest = speedtest.Speedtest()
         self.display = SevenSegment.SevenSegment(address=0x70)
         self.display.begin()
         self.to_normal()
-        log.debug('Initialized')
+        log.info('Initialized')
 
     def check_speed(self):
         self.slow_led.off()
         self.normal_led.off()
         self.rebooting_led.on()
-        s = speedtest.Speedtest()
-        s.get_best_server()
-        s.download()
-        self.download_speed = s.results.download / 10**6
+        self.speedtest.get_best_server()
+        self.speedtest.download()
+        self.download_speed = self.speedtest.results.download / 10**6
         self.display_speed()
         log.debug('Download speed = {:.1f} Mbps'.format(self.download_speed))
         self.update()
@@ -148,6 +150,16 @@ class SpeedTestRebooter(ReadConfigMixin, TimeoutMachine):
     def can_go_low(self):
         return not self.can_go_normal()
 
+    def send_notification(self):
+        send_gmail(
+            self.config['Notifications']['EMAIL_FROM'],
+            self.config['Notifications']['EMAIL_PASSWORD'],
+            self.config['Notifications']['EMAILS_TO'],
+            'Rebooting the router in 1 minute',
+            'The internet is slow ({:.1f}Mbps), press the red button to cancel the reboot.'.format(self.download_speed)
+        )
+        log.debug('Notification sent')
+
     def on_enter_low(self):
         self.display.set_blink(HT16K33.HT16K33_BLINK_1HZ)
         self.buzzer.stop()
@@ -163,6 +175,8 @@ class SpeedTestRebooter(ReadConfigMixin, TimeoutMachine):
         self.normal_led.on()
 
     def on_enter_warn_reboot(self):
+        log.info('About to reboot, last speed was {:.1f}Mbps'.format(self.download_speed))
+        self.send_notification()
         self.display.set_blink(HT16K33.HT16K33_BLINK_2HZ)
         self.normal_led.off()
         self.rebooting_led.off()
@@ -183,14 +197,18 @@ class SpeedTestRebooter(ReadConfigMixin, TimeoutMachine):
         self.rebooting_led.off()
 
     def reboot(self):
-        log.warning('Rebooting')
+        log.warning('Rebooting, last speed was {:.1f}Mbps'.format(self.download_speed))
         self.modem.off()
         self.router.off()
         sleep(self.config['Main']['REBOOT_DELAY_SECONDS'])
         self.modem.on()
         sleep(self.config['Main']['ROUTER_DELAY_SECONDS'])
         self.router.on()
+        self.download_speed = self.config['Main']['SLOW_SPEED']
         self.to_normal()
+
+    def reboot_cancelled(self):
+        log.info('Reboot was cancelled, last speed was {:.1f}Mbps'.format(self.download_speed))
 
     def cleanup(self):
         self.buzzer.stop()
@@ -198,4 +216,4 @@ class SpeedTestRebooter(ReadConfigMixin, TimeoutMachine):
         self.slow_led.off()
         self.display_speed(clear=True)
         GPIO.cleanup()
-        log.debug('Shutdown')
+        log.info('Shutdown')
