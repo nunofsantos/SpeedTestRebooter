@@ -110,10 +110,12 @@ class SpeedTestRebooter(ReadConfigMixin, TimeoutMachine):
         self.button = Button(self.config['Main']['BUTTON_PIN'], self.button_pressed,
                              hold_seconds=self.config['Main']['MANUAL_REBOOT_SECONDS'], held_callback=self.button_held)
         self.buzzer = Buzzer(self.config['Main']['BUZZER_PIN'], 10000, self.config['Main']['QUIET_HOURS_RANGE'])
-        self.download_speed = self.config['Main']['SLOW_SPEED']
-        self.speedtest = speedtest.Speedtest()
+        self.invalid_speed = 888.8  # visual cue for no real download speed info available
+        self.download_speed = self.invalid_speed
+        self.speedtest = None
         self.display = SevenSegment.SevenSegment(address=0x70)
         self.display.begin()
+        self.display_speed()
         self.to_normal()
         log.info('Initialized')
 
@@ -121,11 +123,17 @@ class SpeedTestRebooter(ReadConfigMixin, TimeoutMachine):
         self.slow_led.off()
         self.normal_led.off()
         self.rebooting_led.on()
-        self.speedtest.get_best_server()
-        self.speedtest.download()
-        self.download_speed = self.speedtest.results.download / 10**6
-        self.display_speed()
-        log.debug('Download speed = {:.1f} Mbps'.format(self.download_speed))
+        try:
+            if self.speedtest is None:
+                self.speedtest = speedtest.Speedtest()
+            self.speedtest.get_best_server()
+            self.speedtest.download()
+            self.download_speed = self.speedtest.results.download / 10 ** 6
+            self.display_speed()
+            log.debug('Download speed = {:.1f} Mbps'.format(self.download_speed))
+        except speedtest.SpeedtestException:
+            log.info('No internet connectivity')
+            self.download_speed = self.invalid_speed
         self.update()
 
     def display_speed(self, clear=False):
